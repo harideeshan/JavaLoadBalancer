@@ -13,6 +13,10 @@ public class BackendServer {
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
         server.createContext("/", exchange -> {
+            // --- ADD THIS TO SIMULATE HEAVY WORK ---
+            try { Thread.sleep(5000); } catch (InterruptedException e) {} 
+            // ---------------------------------------
+
             String response = "Hello! You have reached the server on port: " + port;
             exchange.sendResponseHeaders(200, response.length());
             OutputStream os = exchange.getResponseBody();
