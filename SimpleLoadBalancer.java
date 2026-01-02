@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.URI; // Use URI to avoid deprecation warnings
 import java.net.URL;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
@@ -13,11 +14,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class SimpleLoadBalancer {
 
-    // Internal class to track Backend Server state
     static class Backend {
         String url;
-        volatile boolean alive = true; // 'volatile' ensures visibility across threads
-
+        volatile boolean alive = true;
         Backend(String url) { this.url = url; }
     }
 
@@ -25,39 +24,52 @@ public class SimpleLoadBalancer {
     private static final AtomicInteger counter = new AtomicInteger(0);
 
     public static void main(String[] args) throws IOException {
-        // Define our workers
         backends.add(new Backend("http://localhost:8081"));
         backends.add(new Backend("http://localhost:8082"));
 
-        // 1. Start the Health Checker thread
         startHealthChecker();
 
-        // 2. Start the Load Balancer Server
         HttpServer lb = HttpServer.create(new InetSocketAddress(8080), 0);
         
         lb.createContext("/", exchange -> {
-            // Find the next available ALIVE server
-            Backend target = getNextAliveServer();
+            // --- NEW: STICKY SESSION LOGIC ---
+            String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+            Backend target = null;
+
+            if (cookieHeader != null && cookieHeader.contains("SERVERID=")) {
+                String savedPort = cookieHeader.split("SERVERID=")[1].split(";")[0];
+                target = backends.stream()
+                        .filter(b -> b.url.contains(savedPort) && b.alive)
+                        .findFirst().orElse(null);
+                if(target != null) System.out.println("Sticky Session: Routing to " + target.url);
+            }
 
             if (target == null) {
-                String error = "503 Service Unavailable: No backends online";
+                target = getNextAliveServer();
+                if(target != null) System.out.println("Round Robin: Routing to " + target.url);
+            }
+            // ---------------------------------
+
+            if (target == null) {
+                String error = "503 Service Unavailable";
                 exchange.sendResponseHeaders(503, error.length());
                 exchange.getResponseBody().write(error.getBytes());
-                exchange.getResponseBody().close();
+                exchange.close();
                 return;
             }
 
-            System.out.println("Routing to: " + target.url);
+            // Set cookie so browser remembers this server
+            String port = target.url.substring(target.url.lastIndexOf(":") + 1);
+            exchange.getResponseHeaders().add("Set-Cookie", "SERVERID=" + port + "; Path=/");
             
             try {
-                // Forward the request and get response
-                String response = proxyRequest(target.url);
-                exchange.sendResponseHeaders(200, response.length());
+                byte[] response = proxyRequest(target.url);
+                exchange.sendResponseHeaders(200, response.length);
                 OutputStream os = exchange.getResponseBody();
-                os.write(response.getBytes());
+                os.write(response);
                 os.close();
             } catch (Exception e) {
-                exchange.sendResponseHeaders(502, 0); // Bad Gateway
+                exchange.sendResponseHeaders(502, 0);
                 exchange.close();
             }
         });
@@ -72,7 +84,7 @@ public class SimpleLoadBalancer {
             Backend b = backends.get(index);
             if (b.alive) return b;
         }
-        return null; // All servers are down
+        return null;
     }
 
     private static void startHealthChecker() {
@@ -80,7 +92,8 @@ public class SimpleLoadBalancer {
         scheduler.scheduleAtFixedRate(() -> {
             for (Backend b : backends) {
                 try {
-                    HttpURLConnection conn = (HttpURLConnection) new URL(b.url).openConnection();
+                    // Modern way to create URL: URI.create().toURL()
+                    HttpURLConnection conn = (HttpURLConnection) URI.create(b.url).toURL().openConnection();
                     conn.setConnectTimeout(1000);
                     conn.connect();
                     b.alive = (conn.getResponseCode() == 200);
@@ -92,9 +105,10 @@ public class SimpleLoadBalancer {
         }, 0, 5, TimeUnit.SECONDS);
     }
 
-    private static String proxyRequest(String targetUrl) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(targetUrl).openConnection();
-        InputStream is = conn.getInputStream();
-        return new String(is.readAllBytes());
+    private static byte[] proxyRequest(String targetUrl) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) URI.create(targetUrl).toURL().openConnection();
+        try (InputStream is = conn.getInputStream()) {
+            return is.readAllBytes();
+        }
     }
 }
