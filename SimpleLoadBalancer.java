@@ -24,8 +24,8 @@ public class SimpleLoadBalancer {
     private static final AtomicInteger counter = new AtomicInteger(0);
 
     public static void main(String[] args) throws IOException {
-        backends.add(new Backend("http://localhost:8081"));
-        backends.add(new Backend("http://localhost:8082"));
+        backends.add(new Backend("http://backend1:8081"));
+        backends.add(new Backend("http://backend2:8082"));
 
         startHealthChecker();
 

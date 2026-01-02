@@ -1,0 +1,23 @@
+
+
+services:
+  # Our Load Balancer
+  load-balancer:
+    build: .
+    ports:
+      - "8080:8080"
+    command: ["java", "SimpleLoadBalancer"]
+    depends_on:
+      - backend1
+      - backend2
+
+  # Backend Worker 1
+  backend1:
+    build: .
+    command: ["java", "BackendServer", "8081"]
+    # No ports needed here! They are hidden inside the Docker network.
+
+  # Backend Worker 2
+  backend2:
+    build: .
+    command: ["java", "BackendServer", "8082"]
